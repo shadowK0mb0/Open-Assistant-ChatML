@@ -7,22 +7,20 @@ from typing import Literal, Optional
 from pydantic import BaseModel, validator
 from pydantic.fields import ModelField
 
-QA_SPECIAL_TOKENS = {
-    "Question": "<|prompter|>",
-    "Answer": "<|assistant|>",
-    "System": "<|system|>",
-    "StartPrefix": "<|prefix_begin|>",
-    "EndPrefix": "<|prefix_end|>",
+CHATML_TOKENS = {
+    "Start": "<|im_start|>",
+    "Middle": "\n",
+    "End": "<|im_end|>",
 }
 
-
 def format_system_prefix(prefix, eos_token):
-    return "{}{}{}".format(
-        QA_SPECIAL_TOKENS["System"],
+    return "{}{}{}{}{}".format(
+        CHATML_TOKENS["Start"],
+        "system",
+        CHATML_TOKENS["Middle"],
         prefix,
         eos_token,
     )
-
 
 def compute_length(s: str) -> int:
     return len(re.findall(r"\w+", s)) // 5 + 1
@@ -95,7 +93,7 @@ class Utterance(BaseModel):
             return ""
 
         content = "\n".join(fragments)
-        return f"{QA_SPECIAL_TOKENS['System']}{content}\n{eos_token}"
+        return f"{CHATML_TOKENS['Start']}system{CHATML_TOKENS['Middle']}{content}{eos_token}"
 
 
 class DatasetEntry(BaseModel):
@@ -129,7 +127,7 @@ class DatasetEntrySft(DatasetEntry):
                     a = self.conversation[i + 1]
                     assert a.role == Role.assistant
                     system_tag = a.system_tag(
-                        eos_token=eos_token,
+                        eos_token=CHATML_TOKENS["End"],
                         property_dropout=system_property_dropout,
                         add_length=system_add_length,
                     )
@@ -137,12 +135,17 @@ class DatasetEntrySft(DatasetEntry):
                     system_tag = ""
                 if i == 0 and self.system_message:
                     output.append(
-                        f"{QA_SPECIAL_TOKENS['System']}{self.system_message}{eos_token}{QA_SPECIAL_TOKENS['Question']}{m.text}{eos_token}{system_tag}"
+                        f"{CHATML_TOKENS['Start']}system{CHATML_TOKENS['Middle']}{self.system_message}{CHATML_TOKENS['End']}"
+                        f"{CHATML_TOKENS['Start']}user{CHATML_TOKENS['Middle']}{m.text}{CHATML_TOKENS['End']}{system_tag}"
                     )
                 else:
-                    output.append(f"{QA_SPECIAL_TOKENS['Question']}{m.text}{eos_token}{system_tag}")
+                    output.append(
+                        f"{CHATML_TOKENS['Start']}user{CHATML_TOKENS['Middle']}{m.text}{CHATML_TOKENS['End']}{system_tag}"
+                    )
             else:
-                output.append(f"{QA_SPECIAL_TOKENS['Answer']}{m.text}{eos_token}")
+                output.append(
+                    f"{CHATML_TOKENS['Start']}assistant{CHATML_TOKENS['Middle']}{m.text}{CHATML_TOKENS['End']}"
+                )
 
         return output
 
@@ -177,7 +180,9 @@ class DatasetEntryRm(DatasetEntry):
         prefix_messages: list[str] = []
         for i, m in enumerate(self.messages):
             if m.role == Role.prompter:
-                prefix_messages.append(f"{QA_SPECIAL_TOKENS['Question']}{m.text}{eos_token}")
+                prefix_messages.append(
+                    f"{CHATML_TOKENS['Start']}user{CHATML_TOKENS['Middle']}{m.text}{CHATML_TOKENS['End']}"
+                )
             else:
                 if use_system_tag:
                     assert m.role == Role.assistant
@@ -188,7 +193,9 @@ class DatasetEntryRm(DatasetEntry):
                     )
                 else:
                     system_tag = ""
-                prefix_messages.append(f"{system_tag}{QA_SPECIAL_TOKENS['Answer']}{m.text}{eos_token}")
+                prefix_messages.append(
+                    f"{CHATML_TOKENS['Start']}assistant{CHATML_TOKENS['Middle']}{m.text}{CHATML_TOKENS['End']}{system_tag}"
+                )
         prefix = "".join(prefix_messages)
 
         #  format reply variants
@@ -197,13 +204,15 @@ class DatasetEntryRm(DatasetEntry):
             assert r.role == Role.assistant
             if use_system_tag:
                 system_tag = r.system_tag(
-                    eos_token=eos_token,
+                    eos_token=CHATML_TOKENS["End"],
                     property_dropout=system_property_dropout,
                     add_length=system_add_length,
                 )
             else:
                 system_tag = ""
-            replies.append(f"{system_tag}{QA_SPECIAL_TOKENS['Answer']}{r.text}{eos_token}")
+            replies.append(
+                f"{system_tag}{CHATML_TOKENS['Start']}assistant{CHATML_TOKENS['Middle']}{r.text}{CHATML_TOKENS['End']}"
+            )
 
         return prefix, replies
 
@@ -250,18 +259,24 @@ def format_pairs(
 ) -> list[str]:
     assert isinstance(pairs, list)
     conversations = [
-        "{}{}{}".format(QA_SPECIAL_TOKENS["Question" if i % 2 == 0 else "Answer"], pairs[i], eos_token)
+        "{}{}{}{}{}".format(
+            CHATML_TOKENS["Start"],
+            "user" if i % 2 == 0 else "assistant",
+            CHATML_TOKENS["Middle"],
+            pairs[i],
+            eos_token,
+        )
         for i in range(len(pairs))
     ]
     if add_initial_reply_token:
-        conversations.append(QA_SPECIAL_TOKENS["Answer"])
+        conversations.append(f"{CHATML_TOKENS['Start']}assistant")
     return conversations
 
 
 def format_rl_text(pairs: list[str]) -> str:
     # convert question answer pairs to only the prefix prompt for RLHF
-    return "{}{}{}".format(QA_SPECIAL_TOKENS["Question"], pairs[0], QA_SPECIAL_TOKENS["Answer"])
+    return f"{CHATML_TOKENS['Start']}user{CHATML_TOKENS['Middle']}{pairs[0]}{CHATML_TOKENS['End']}"
 
 
 def format_reply(text: str, eos_token: str) -> str:
-    return "{}{}{}".format(QA_SPECIAL_TOKENS["Answer"], text, eos_token)
+    return f"{CHATML_TOKENS['Start']}assistant{CHATML_TOKENS['Middle']}{text}{eos_token}"

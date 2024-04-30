@@ -247,30 +247,43 @@ def tokenizer_sanity_check(tokenizer):
     print(f"bos_token='{tokenizer.bos_token}', bos_token_id={tokenizer.bos_token_id}")
     print(f"eos_token='{tokenizer.eos_token}', eos_token_id={tokenizer.eos_token_id}")
 
-    from model_training.custom_datasets.formatting import QA_SPECIAL_TOKENS, create_dataset_entry_qa
+    from model_training.custom_datasets.formatting import CHATML_TOKENS, create_dataset_entry_qa
+        
+    start_token_id = tokenizer.convert_tokens_to_ids(CHATML_TOKENS["Start"])
+    sep_token_id = tokenizer.convert_tokens_to_ids(CHATML_TOKENS["Middle"])
+    end_token_id = tokenizer.convert_tokens_to_ids(CHATML_TOKENS["End"])
+    print(f"{start_token_id=}, {sep_token_id=}, {end_token_id=}")
 
     ds_entry = create_dataset_entry_qa(
         mode="sft", questions=["Q1", "Q2"], answers=["A1", "A2"], lang="en", context="ctx"
     )
     in_text = ds_entry.get_formatted(
-        tokenizer.eos_token,
+        CHATML_TOKENS["End"],
         use_system_tag=True,
         system_property_dropout=0,
         system_add_length=True,
     )
     in_text = "".join(in_text)
 
-    prompter_token_id = tokenizer.convert_tokens_to_ids(QA_SPECIAL_TOKENS["Question"])
-    assistant_token_id = tokenizer.convert_tokens_to_ids(QA_SPECIAL_TOKENS["Answer"])
-    print(f"{prompter_token_id=}, {assistant_token_id=}")
-
     tr = tokenizer(in_text, max_length=1024, pad_to_max_length=False, truncation=True)
 
     message_indices = []
-    i = -1
+    assistant_tokens = tokenizer(f"{CHATML_TOKENS['Start']}assistant")
+    i = 0
+    j = 0
     for id in tr.input_ids:
-        if id in (prompter_token_id, assistant_token_id):
-            i += 1
+        if id == assistant_tokens.input_ids[j]:
+            j += 1
+            if j == len(assistant_tokens.input_ids):
+                i += 1
+                for k in range(j-1):
+                    message_indices[-1 - k] = i
+                j = 0
+        else:
+            if j == 1 and i%2 == 1:
+                i += 1
+                message_indices[-1] = i
+            j = 0
         message_indices.append(i)
 
     print("encoding result:", tr)

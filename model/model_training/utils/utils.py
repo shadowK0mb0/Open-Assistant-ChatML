@@ -11,7 +11,7 @@ import torch
 import transformers
 import yaml
 from model_training.custom_datasets import get_one_dataset
-from model_training.custom_datasets.formatting import QA_SPECIAL_TOKENS
+from model_training.custom_datasets.formatting import CHATML_TOKENS
 from model_training.models import freeze_top_n_layers, get_specific_model
 from model_training.models.patching import patch_model
 from model_training.models.prefix_llama import LlamaForCausalLM
@@ -236,7 +236,7 @@ def get_tokenizer(conf) -> transformers.AutoTokenizer:
         if "additional_special_tokens" not in tokenizer.special_tokens_map
         else tokenizer.special_tokens_map["additional_special_tokens"]
     )
-    additional_special_tokens = list(set(additional_special_tokens + list(QA_SPECIAL_TOKENS.values())))
+    additional_special_tokens = list(set(additional_special_tokens + list(CHATML_TOKENS.values())))
 
     tokenizer.add_special_tokens({"additional_special_tokens": additional_special_tokens})
 

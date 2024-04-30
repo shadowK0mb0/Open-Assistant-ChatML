@@ -5,7 +5,7 @@ from typing import Optional, Union
 import numpy as np
 import torch
 from model_training.custom_datasets.formatting import (
-    QA_SPECIAL_TOKENS,
+    CHATML_TOKENS,
     DatasetEntryLm,
     DatasetEntrySft,
     format_pairs,
@@ -39,10 +39,17 @@ class DialogueDataCollator:
     def __post_init__(self):
         assert self.tokenizer.eos_token
 
+        self.assistant_start_tokens = self.tokenizer(f"{CHATML_TOKENS['Start']}assistant")
+
+        start_token_id = self.tokenizer.convert_tokens_to_ids(CHATML_TOKENS["Start"])
+        end_token_id = self.tokenizer.convert_tokens_to_ids(CHATML_TOKENS["End"])
+        sep_token_id = self.tokenizer.convert_tokens_to_ids(CHATML_TOKENS["Middle"])
+        assert start_token_id >= 0 and end_token_id >= 0 and sep_token_id >= 0
+
         if self.use_system_prefix:
             assert self.system_prefix
             self.system_prefix = self.tokenizer.encode(
-                format_system_prefix(self.system_prefix, self.tokenizer.eos_token),
+                format_system_prefix(self.system_prefix, CHATML_TOKENS['End']),
                 add_special_tokens=False,
                 return_tensors="np",
             )[0]
@@ -60,7 +67,7 @@ class DialogueDataCollator:
         pretrain_dataset = False
         if isinstance(messages, DatasetEntrySft):
             messages = messages.get_formatted(
-                eos_token=self.tokenizer.eos_token,
+                eos_token=CHATML_TOKENS['End'],
                 use_system_tag=self.use_system_tag,
                 system_property_dropout=self.system_property_dropout,
                 system_add_length=self.system_add_length,
@@ -70,7 +77,7 @@ class DialogueDataCollator:
             pretrain_dataset = True
         else:
             messages = list(messages)
-            messages = format_pairs(messages, self.tokenizer.eos_token)
+            messages = format_pairs(messages, CHATML_TOKENS['End'])
 
         flatten_message = self.tokenizer(
             "".join(messages),
@@ -103,15 +110,27 @@ class DialogueDataCollator:
             #     )
             # )
 
-            prompter_token_id = self.tokenizer.convert_tokens_to_ids(QA_SPECIAL_TOKENS["Question"])
-            assistant_token_id = self.tokenizer.convert_tokens_to_ids(QA_SPECIAL_TOKENS["Answer"])
-            assert prompter_token_id >= 0 and assistant_token_id >= 0
-
+            # This is sort of hard to read. But basically it's a simple loop that goes through the input_ids 
+            # and generates the above label_mask. It's a bit more complicated because we can't just look at a
+            # single token and know if we are at an assistant or user message. We effectively have to wait
+            # until we match the assistant_start_tokens to know we are at the start of an assistant message.
+            # Then go back and change the previous tokens to be part of the assistant message.
+            i = 0
+            j = 0
             message_indices = []
-            i = -1
             for x in flatten_message.input_ids:
-                if x in (prompter_token_id, assistant_token_id):
-                    i += 1
+                if x == self.assistant_start_tokens.input_ids[j]:
+                    j += 1
+                    if j == len(self.assistant_start_tokens.input_ids):
+                        i += 1
+                        for k in range(j-1):
+                            message_indices[-1 - k] = i
+                        j = 0
+                else:
+                    if j == 1 and i%2 == 1:
+                        i += 1
+                        message_indices[-1] = i
+                    j = 0
                 message_indices.append(i)
 
         input_length = len(flatten_message.input_ids)
@@ -129,7 +148,8 @@ class DialogueDataCollator:
         else:
             label_mask = np.ones(len(flatten_message.input_ids), dtype=bool)
 
-        label_mask[-1] = False  # make sure last token is inactive, has an effect only when truncating
+        # For us last token is end token so we want it
+        # label_mask[-1] = False  # make sure last token is inactive, has an effect only when truncating
 
         if len(flatten_message.input_ids) < self.mix_length_threshold and self.samples_mixing:
             total_short_context_one += len(flatten_message.input_ids)
